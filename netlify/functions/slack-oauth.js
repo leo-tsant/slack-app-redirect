@@ -1,12 +1,10 @@
-// netlify/functions/slack-oauth.js
 const https = require('https');
 const querystring = require('querystring');
 
+const { Client } = require('pg');
+
 exports.handler = async (event, context) => {
-    console.log('Function called with method:', event.httpMethod);
-    
     if (event.httpMethod !== 'POST') {
-        console.log('Invalid method:', event.httpMethod);
         return {
             statusCode: 405,
             body: JSON.stringify({ error: 'Method not allowed' })
@@ -16,9 +14,7 @@ exports.handler = async (event, context) => {
     let body;
     try {
         body = JSON.parse(event.body);
-        console.log('Received body:', JSON.stringify(body, null, 2));
     } catch (error) {
-        console.error('Failed to parse body:', error);
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Invalid request body' })
@@ -28,7 +24,6 @@ exports.handler = async (event, context) => {
     const { code, state } = body;
 
     if (!code) {
-        console.log('Missing authorization code');
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Missing authorization code' })
@@ -39,8 +34,6 @@ exports.handler = async (event, context) => {
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
     const redirectUri = process.env.SLACK_REDIRECT_URI || `${process.env.URL}/callback`;
 
-    console.log('Using redirect URI:', redirectUri);
-
     if (!clientId || !clientSecret) {
         console.error('Missing Slack credentials in environment variables');
         return {
@@ -49,16 +42,54 @@ exports.handler = async (event, context) => {
         };
     }
 
-    const postData = querystring.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        code: code,
-        redirect_uri: redirectUri
-    });
+    // Exchange code for token
+    const tokenResponse = await exchangeCodeForToken(clientId, clientSecret, code, redirectUri);
+    
+    if (!tokenResponse.ok) {
+        return {
+            statusCode: 400,
+            body: JSON.stringify({ 
+                error: tokenResponse.error || 'OAuth failed',
+                details: tokenResponse.error_description
+            })
+        };
+    }
 
-    console.log('Making request to Slack OAuth API...');
+    // Store the token in your database
+    try {
+        await storeWorkspaceToken(tokenResponse);
+        
+        // Also send the token to n8n via webhook if needed
+        if (process.env.N8N_WEBHOOK_URL) {
+            await notifyN8n(tokenResponse);
+        }
+    } catch (error) {
+        console.error('Failed to store token:', error);
+        // Don't fail the OAuth flow, but log the error
+    }
 
+    // Return success (without exposing the token)
+    return {
+        statusCode: 200,
+        body: JSON.stringify({
+            success: true,
+            team_id: tokenResponse.team?.id,
+            team_name: tokenResponse.team?.name,
+            bot_user_id: tokenResponse.bot_user_id,
+            scope: tokenResponse.scope
+        })
+    };
+};
+
+async function exchangeCodeForToken(clientId, clientSecret, code, redirectUri) {
     return new Promise((resolve, reject) => {
+        const postData = querystring.stringify({
+            client_id: clientId,
+            client_secret: clientSecret,
+            code: code,
+            redirect_uri: redirectUri
+        });
+
         const options = {
             hostname: 'slack.com',
             port: 443,
@@ -72,79 +103,92 @@ exports.handler = async (event, context) => {
 
         const req = https.request(options, (res) => {
             let data = '';
-            console.log('Received response from Slack. Status:', res.statusCode);
-
-            res.on('data', (chunk) => {
-                data += chunk;
-            });
-
+            res.on('data', (chunk) => data += chunk);
             res.on('end', () => {
-                console.log('Received full response from Slack');
                 try {
-                    const response = JSON.parse(data);
-                    console.log('Parsed response:', JSON.stringify(response, null, 2));
-                    
-                    if (!response.ok) {
-                        console.error('Slack OAuth error:', response.error);
-                        resolve({
-                            statusCode: 400,
-                            body: JSON.stringify({ 
-                                error: response.error || 'OAuth failed',
-                                details: response.error_description
-                            })
-                        });
-                        return;
-                    }
-
-                    const result = {
-                        success: true,
-                        team_id: response.team?.id,
-                        team_name: response.team?.name,
-                        bot_user_id: response.bot_user_id,
-                        scope: response.scope,
-                        access_token: response.access_token,
-                        token_type: response.token_type
-                    };
-
-                    if (response.authed_user) {
-                        result.authed_user = {
-                            id: response.authed_user.id,
-                            scope: response.authed_user.scope,
-                            token_type: response.authed_user.token_type
-                        };
-                    }
-
-                    console.log('OAuth successful for team:', result.team_name);
-                    
-                    // Remove sensitive data before sending to client
-                    delete result.access_token;
-                    if (result.authed_user) {
-                        delete result.authed_user.access_token;
-                    }
-
-                    resolve({
-                        statusCode: 200,
-                        body: JSON.stringify(result)
-                    });
+                    resolve(JSON.parse(data));
                 } catch (error) {
-                    console.error('Failed to parse Slack response:', error);
-                    resolve({
-                        statusCode: 500,
-                        body: JSON.stringify({ error: 'Failed to parse response' })
-                    });
+                    reject(error);
                 }
             });
         });
 
-        req.on('error', (error) => {
-            console.error('Request error:', error);
-            resolve({
-                statusCode: 500,
-                body: JSON.stringify({ error: 'Request failed' })
-            });
-        });
-
+        req.on('error', reject);
         req.write(postData);
         req.end();
     });
-};
+}
+
+async function storeWorkspaceToken(tokenData) {
+    // Connect to your PostgreSQL database
+    const client = new Client({
+        connectionString: process.env.DATABASE_URL, // Add this to your Netlify env vars
+    });
+
+    try {
+        await client.connect();
+        
+        // Upsert the workspace token
+        const query = `
+            INSERT INTO slack_workspaces (team_id, team_name, bot_token, bot_user_id, app_id, scopes)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (team_id) 
+            DO UPDATE SET 
+                bot_token = $3,
+                team_name = $2,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *;
+        `;
+        
+        const values = [
+            tokenData.team?.id,
+            tokenData.team?.name,
+            tokenData.access_token,
+            tokenData.bot_user_id,
+            tokenData.app_id,
+            tokenData.scope
+        ];
+        
+        const result = await client.query(query, values);
+        console.log('Token stored for workspace:', result.rows[0].team_name);
+        
+    } finally {
+        await client.end();
+    }
+}
+
+async function notifyN8n(tokenData) {
+    // Optional: Notify n8n about the new installation
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    
+    const data = JSON.stringify({
+        event: 'app_installed',
+        team_id: tokenData.team?.id,
+        team_name: tokenData.team?.name,
+        bot_user_id: tokenData.bot_user_id
+    });
+
+    // Send webhook to n8n
+    return new Promise((resolve, reject) => {
+        const url = new URL(webhookUrl);
+        const options = {
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            res.on('data', () => {}); // Consume response
+            res.on('end', resolve);
+        });
+
+        req.on('error', reject);
+        req.write(data);
+        req.end();
+    });
+}
