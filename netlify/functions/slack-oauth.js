@@ -172,10 +172,20 @@ async function storeWorkspaceToken(tokenData) {
     }
 
     try {
-        // Create table if it doesn't exist
-        const { error: createTableError } = await supabase.rpc('create_slack_workspaces_table');
-        if (createTableError) {
-            console.log('[DEBUG] Table creation error:', createTableError);
+        // First, check if the table exists
+        const { data: tableExists, error: checkError } = await supabase
+            .from('slack_workspaces')
+            .select('team_id')
+            .limit(1);
+
+        if (checkError && checkError.code === '42P01') { // Table doesn't exist
+            console.log('[DEBUG] Table does not exist, creating it...');
+            // Create the table using raw SQL
+            const { error: createError } = await supabase.rpc('create_slack_workspaces_table');
+            if (createError) {
+                console.error('[DEBUG] Failed to create table:', createError);
+                throw createError;
+            }
         }
 
         // Upsert the workspace token
