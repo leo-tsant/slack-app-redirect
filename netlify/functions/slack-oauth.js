@@ -4,13 +4,17 @@ const querystring = require('querystring');
 let pg;
 try {
     pg = require('pg');
-    console.log('PostgreSQL package loaded successfully');
+    console.log('[DEBUG] PostgreSQL package loaded successfully');
 } catch (error) {
-    console.log('PostgreSQL package not available, database storage will be disabled');
+    console.log('[DEBUG] PostgreSQL package not available:', error.message);
 }
 
 exports.handler = async (event, context) => {
+    console.log('[DEBUG] Function started');
+    console.log('[DEBUG] HTTP Method:', event.httpMethod);
+    
     if (event.httpMethod !== 'POST') {
+        console.log('[DEBUG] Invalid HTTP method');
         return {
             statusCode: 405,
             body: JSON.stringify({ error: 'Method not allowed' })
@@ -20,7 +24,9 @@ exports.handler = async (event, context) => {
     let body;
     try {
         body = JSON.parse(event.body);
+        console.log('[DEBUG] Request body parsed successfully');
     } catch (error) {
+        console.log('[DEBUG] Failed to parse request body:', error.message);
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Invalid request body' })
@@ -28,8 +34,10 @@ exports.handler = async (event, context) => {
     }
 
     const { code, state } = body;
+    console.log('[DEBUG] Authorization code received:', code ? 'Yes' : 'No');
 
     if (!code) {
+        console.log('[DEBUG] Missing authorization code');
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Missing authorization code' })
@@ -40,8 +48,14 @@ exports.handler = async (event, context) => {
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
     const redirectUri = process.env.SLACK_REDIRECT_URI || `${process.env.URL}/callback`;
 
+    console.log('[DEBUG] Environment variables check:', {
+        clientIdPresent: !!clientId,
+        clientSecretPresent: !!clientSecret,
+        redirectUri: redirectUri
+    });
+
     if (!clientId || !clientSecret) {
-        console.error('Missing Slack credentials in environment variables');
+        console.error('[DEBUG] Missing Slack credentials in environment variables');
         return {
             statusCode: 500,
             body: JSON.stringify({ error: 'Server configuration error' })
@@ -49,9 +63,16 @@ exports.handler = async (event, context) => {
     }
 
     // Exchange code for token
+    console.log('[DEBUG] Attempting to exchange code for token');
     const tokenResponse = await exchangeCodeForToken(clientId, clientSecret, code, redirectUri);
+    console.log('[DEBUG] Token exchange response:', {
+        ok: tokenResponse.ok,
+        error: tokenResponse.error,
+        teamId: tokenResponse.team?.id
+    });
     
     if (!tokenResponse.ok) {
+        console.log('[DEBUG] Token exchange failed:', tokenResponse.error);
         return {
             statusCode: 400,
             body: JSON.stringify({ 
@@ -61,23 +82,22 @@ exports.handler = async (event, context) => {
         };
     }
 
-    console.log("GPGPGPGP", pg)
-
     // Store the token in your database if available
     if (pg && process.env.DATABASE_URL) {
-        console.log('Attempting database connection with URL:', process.env.DATABASE_URL.replace(/:[^:@]*@/, ':****@')); // Hide password in logs
+        console.log('[DEBUG] Database configuration present, attempting to store token');
         try {
             await storeWorkspaceToken(tokenResponse);
+            console.log('[DEBUG] Token stored successfully');
         } catch (error) {
-            console.error('Failed to store token in database:', error);
-            console.error('Error details:', {
+            console.error('[DEBUG] Failed to store token in database:', {
                 message: error.message,
                 code: error.code,
-                stack: error.stack
+                stack: error.stack,
+                databaseUrl: process.env.DATABASE_URL ? 'Present' : 'Missing'
             });
         }
     } else {
-        console.log('Database storage not configured:', {
+        console.log('[DEBUG] Database storage not configured:', {
             pgAvailable: !!pg,
             databaseUrlPresent: !!process.env.DATABASE_URL
         });
@@ -85,15 +105,16 @@ exports.handler = async (event, context) => {
     
     // Also send the token to n8n via webhook if needed
     if (process.env.N8N_WEBHOOK_URL) {
+        console.log('[DEBUG] N8N webhook URL present, attempting to notify');
         try {
             await notifyN8n(tokenResponse);
+            console.log('[DEBUG] N8N notification sent successfully');
         } catch (error) {
-            console.error('Failed to notify n8n:', error);
-            // Don't fail the OAuth flow, but log the error
+            console.error('[DEBUG] Failed to notify n8n:', error.message);
         }
     }
 
-    // Return success (without exposing the token)
+    console.log('[DEBUG] OAuth flow completed successfully');
     return {
         statusCode: 200,
         body: JSON.stringify({
