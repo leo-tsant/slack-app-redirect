@@ -1,7 +1,12 @@
 const https = require('https');
 const querystring = require('querystring');
 
-const { Client } = require('pg');
+let pg;
+try {
+    pg = require('pg');
+} catch (error) {
+    console.log('PostgreSQL package not available, database storage will be disabled');
+}
 
 exports.handler = async (event, context) => {
     if (event.httpMethod !== 'POST') {
@@ -55,17 +60,26 @@ exports.handler = async (event, context) => {
         };
     }
 
-    // Store the token in your database
-    try {
-        await storeWorkspaceToken(tokenResponse);
-        
-        // Also send the token to n8n via webhook if needed
-        if (process.env.N8N_WEBHOOK_URL) {
-            await notifyN8n(tokenResponse);
+    // Store the token in your database if available
+    if (pg && process.env.DATABASE_URL) {
+        try {
+            await storeWorkspaceToken(tokenResponse);
+        } catch (error) {
+            console.error('Failed to store token in database:', error);
+            // Don't fail the OAuth flow, but log the error
         }
-    } catch (error) {
-        console.error('Failed to store token:', error);
-        // Don't fail the OAuth flow, but log the error
+    } else {
+        console.log('Database storage not configured, skipping token storage');
+    }
+    
+    // Also send the token to n8n via webhook if needed
+    if (process.env.N8N_WEBHOOK_URL) {
+        try {
+            await notifyN8n(tokenResponse);
+        } catch (error) {
+            console.error('Failed to notify n8n:', error);
+            // Don't fail the OAuth flow, but log the error
+        }
     }
 
     // Return success (without exposing the token)
@@ -120,9 +134,14 @@ async function exchangeCodeForToken(clientId, clientSecret, code, redirectUri) {
 }
 
 async function storeWorkspaceToken(tokenData) {
+    if (!pg || !process.env.DATABASE_URL) {
+        console.log('Database storage not configured');
+        return;
+    }
+
     // Connect to your PostgreSQL database
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL, // Add this to your Netlify env vars
+    const client = new pg.Client({
+        connectionString: process.env.DATABASE_URL,
     });
 
     try {
