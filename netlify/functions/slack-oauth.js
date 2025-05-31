@@ -3,7 +3,10 @@ const https = require('https');
 const querystring = require('querystring');
 
 exports.handler = async (event, context) => {
+    console.log('Function called with method:', event.httpMethod);
+    
     if (event.httpMethod !== 'POST') {
+        console.log('Invalid method:', event.httpMethod);
         return {
             statusCode: 405,
             body: JSON.stringify({ error: 'Method not allowed' })
@@ -13,7 +16,9 @@ exports.handler = async (event, context) => {
     let body;
     try {
         body = JSON.parse(event.body);
+        console.log('Received body:', JSON.stringify(body, null, 2));
     } catch (error) {
+        console.error('Failed to parse body:', error);
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Invalid request body' })
@@ -23,6 +28,7 @@ exports.handler = async (event, context) => {
     const { code, state } = body;
 
     if (!code) {
+        console.log('Missing authorization code');
         return {
             statusCode: 400,
             body: JSON.stringify({ error: 'Missing authorization code' })
@@ -33,6 +39,8 @@ exports.handler = async (event, context) => {
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
     const redirectUri = process.env.SLACK_REDIRECT_URI || `${process.env.URL}/callback`;
 
+    console.log('Using redirect URI:', redirectUri);
+
     if (!clientId || !clientSecret) {
         console.error('Missing Slack credentials in environment variables');
         return {
@@ -40,12 +48,15 @@ exports.handler = async (event, context) => {
             body: JSON.stringify({ error: 'Server configuration error' })
         };
     }
+
     const postData = querystring.stringify({
         client_id: clientId,
         client_secret: clientSecret,
         code: code,
         redirect_uri: redirectUri
     });
+
+    console.log('Making request to Slack OAuth API...');
 
     return new Promise((resolve, reject) => {
         const options = {
@@ -61,14 +72,17 @@ exports.handler = async (event, context) => {
 
         const req = https.request(options, (res) => {
             let data = '';
+            console.log('Received response from Slack. Status:', res.statusCode);
 
             res.on('data', (chunk) => {
                 data += chunk;
             });
 
             res.on('end', () => {
+                console.log('Received full response from Slack');
                 try {
                     const response = JSON.parse(data);
+                    console.log('Parsed response:', JSON.stringify(response, null, 2));
                     
                     if (!response.ok) {
                         console.error('Slack OAuth error:', response.error);
@@ -100,7 +114,6 @@ exports.handler = async (event, context) => {
                         };
                     }
 
-                   
                     console.log('OAuth successful for team:', result.team_name);
                     
                     // Remove sensitive data before sending to client
