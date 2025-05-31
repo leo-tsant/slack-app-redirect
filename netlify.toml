@@ -1,7 +1,20 @@
 [build]
-  publish = "public"
+  functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+
+# Redirect rules (optional)
 [[redirects]]
-  from = "/slack/oauth/callback"
-  to = "/.netlify/functions/oauth-callback"
-  status = 200 
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# Headers for security (optional but recommended)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    X-XSS-Protection = "1; mode=block"
+    Referrer-Policy = "no-referrer-when-downgrade"
