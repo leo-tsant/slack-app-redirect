@@ -1,0 +1,18 @@
+{
+  "name": "slack-app-redirect",
+  "version": "1.0.0",
+  "description": "Slack app with OAuth authentication",
+  "main": "index.js",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "netlify build"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.0",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.19.0"
+  }
+} 
