@@ -4,18 +4,17 @@
     "description": "Slack OAuth App for Netlify",
     "main": "index.js",
     "scripts": {
-      "test": "echo \"Error: no test specified\" && exit 1",
-      "build": "mkdir -p dist && cp *.html dist/ && cp -r netlify dist/"
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "build": "mkdir -p dist && cp *.html dist/ && cp -r netlify dist/"
     },
     "keywords": [
-      "slack",
-      "oauth",
-      "netlify"
+        "slack",
+        "oauth",
+        "netlify"
     ],
     "author": "",
     "license": "MIT",
     "dependencies": {
-      "pg": "^8.11.3"
-    },
-    "devDependencies": {}
-  }
+        "pg": "^8.16.0"
+    }
+}

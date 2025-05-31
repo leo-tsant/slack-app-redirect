@@ -167,17 +167,32 @@ async function exchangeCodeForToken(clientId, clientSecret, code, redirectUri) {
 
 async function storeWorkspaceToken(tokenData) {
     if (!pg || !process.env.DATABASE_URL) {
-        console.log('Database storage not configured');
+        console.log('[DEBUG] Database storage not configured');
         return;
     }
 
-    // Connect to your PostgreSQL database
-    const client = new pg.Client({
-        connectionString: process.env.DATABASE_URL,
-    });
+    console.log('[DEBUG] Attempting database connection with connection string');
+    const client = new pg.Client(process.env.DATABASE_URL);
 
     try {
+        console.log('[DEBUG] Connecting to database...');
         await client.connect();
+        console.log('[DEBUG] Database connection successful');
+        
+        // Create table if it doesn't exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS slack_workspaces (
+                team_id TEXT PRIMARY KEY,
+                team_name TEXT,
+                bot_token TEXT,
+                bot_user_id TEXT,
+                app_id TEXT,
+                scopes TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log('[DEBUG] Table check/creation completed');
         
         // Upsert the workspace token
         const query = `
@@ -200,11 +215,37 @@ async function storeWorkspaceToken(tokenData) {
             tokenData.scope
         ];
         
+        console.log('[DEBUG] Executing query with values:', {
+            teamId: tokenData.team?.id,
+            teamName: tokenData.team?.name,
+            hasToken: !!tokenData.access_token,
+            botUserId: tokenData.bot_user_id,
+            appId: tokenData.app_id,
+            hasScope: !!tokenData.scope
+        });
+
         const result = await client.query(query, values);
-        console.log('Token stored for workspace:', result.rows[0].team_name);
+        console.log('[DEBUG] Query executed successfully:', {
+            rowsAffected: result.rowCount,
+            teamName: result.rows[0]?.team_name
+        });
         
+    } catch (error) {
+        console.error('[DEBUG] Database error details:', {
+            message: error.message,
+            code: error.code,
+            stack: error.stack,
+            connectionString: process.env.DATABASE_URL ? 'Present' : 'Missing',
+            connectionStringLength: process.env.DATABASE_URL?.length
+        });
+        throw error;
     } finally {
-        await client.end();
+        try {
+            await client.end();
+            console.log('[DEBUG] Database connection closed');
+        } catch (error) {
+            console.error('[DEBUG] Error closing database connection:', error.message);
+        }
     }
 }
 
