@@ -60,13 +60,15 @@ exports.handler = async (event, context) => {
         };
     }
 
+    console.log("GPGPGPGP", pg)
+
     // Store the token in your database if available
     if (pg && process.env.DATABASE_URL) {
+
         try {
             await storeWorkspaceToken(tokenResponse);
         } catch (error) {
             console.error('Failed to store token in database:', error);
-            // Don't fail the OAuth flow, but log the error
         }
     } else {
         console.log('Database storage not configured, skipping token storage');
