@@ -8,11 +8,24 @@ const app = new App({
   clientId: process.env.SLACK_CLIENT_ID,
   clientSecret: process.env.SLACK_CLIENT_SECRET,
   stateSecret: process.env.STATE_SECRET,
-  scopes: ['chat:write', 'channels:read', 'groups:read', 'im:read', 'mpim:read']
+  scopes: [
+    'chat:write',
+    'channels:read',
+    'groups:read',
+    'im:read',
+    'mpim:read',
+    'app_mentions:read',
+    'commands'
+  ]
 });
 
 // Initialize Express app
 const expressApp = express();
+
+// Add a simple message handler
+app.message('hello', async ({ message, say }) => {
+  await say(`Hey there <@${message.user}>!`);
+});
 
 // OAuth callback handler
 expressApp.get('/slack/oauth/callback', async (req, res) => {
