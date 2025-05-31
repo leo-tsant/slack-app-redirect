@@ -1,12 +1,16 @@
 const https = require('https');
 const querystring = require('querystring');
+const { createClient } = require('@supabase/supabase-js');
 
-let pg;
+let supabase;
 try {
-    pg = require('pg');
-    console.log('[DEBUG] PostgreSQL package loaded successfully');
+    supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_KEY
+    );
+    console.log('[DEBUG] Supabase client initialized successfully');
 } catch (error) {
-    console.log('[DEBUG] PostgreSQL package not available:', error.message);
+    console.log('[DEBUG] Failed to initialize Supabase client:', error.message);
 }
 
 exports.handler = async (event, context) => {
@@ -82,25 +86,21 @@ exports.handler = async (event, context) => {
         };
     }
 
-    // Store the token in your database if available
-    if (pg && process.env.DATABASE_URL) {
-        console.log('[DEBUG] Database configuration present, attempting to store token');
+    // Store the token in Supabase if available
+    if (supabase) {
+        console.log('[DEBUG] Supabase client available, attempting to store token');
         try {
             await storeWorkspaceToken(tokenResponse);
             console.log('[DEBUG] Token stored successfully');
         } catch (error) {
-            console.error('[DEBUG] Failed to store token in database:', {
+            console.error('[DEBUG] Failed to store token in Supabase:', {
                 message: error.message,
                 code: error.code,
-                stack: error.stack,
-                databaseUrl: process.env.DATABASE_URL ? 'Present' : 'Missing'
+                stack: error.stack
             });
         }
     } else {
-        console.log('[DEBUG] Database storage not configured:', {
-            pgAvailable: !!pg,
-            databaseUrlPresent: !!process.env.DATABASE_URL
-        });
+        console.log('[DEBUG] Supabase storage not configured');
     }
     
     // Also send the token to n8n via webhook if needed
@@ -166,86 +166,46 @@ async function exchangeCodeForToken(clientId, clientSecret, code, redirectUri) {
 }
 
 async function storeWorkspaceToken(tokenData) {
-    if (!pg || !process.env.DATABASE_URL) {
-        console.log('[DEBUG] Database storage not configured');
+    if (!supabase) {
+        console.log('[DEBUG] Supabase client not available');
         return;
     }
 
-    console.log('[DEBUG] Attempting database connection with connection string');
-    const client = new pg.Client(process.env.DATABASE_URL);
-
     try {
-        console.log('[DEBUG] Connecting to database...');
-        await client.connect();
-        console.log('[DEBUG] Database connection successful');
-        
         // Create table if it doesn't exist
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS slack_workspaces (
-                team_id TEXT PRIMARY KEY,
-                team_name TEXT,
-                bot_token TEXT,
-                bot_user_id TEXT,
-                app_id TEXT,
-                scopes TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        console.log('[DEBUG] Table check/creation completed');
-        
+        const { error: createTableError } = await supabase.rpc('create_slack_workspaces_table');
+        if (createTableError) {
+            console.log('[DEBUG] Table creation error:', createTableError);
+        }
+
         // Upsert the workspace token
-        const query = `
-            INSERT INTO slack_workspaces (team_id, team_name, bot_token, bot_user_id, app_id, scopes)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (team_id) 
-            DO UPDATE SET 
-                bot_token = $3,
-                team_name = $2,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING *;
-        `;
-        
-        const values = [
-            tokenData.team?.id,
-            tokenData.team?.name,
-            tokenData.access_token,
-            tokenData.bot_user_id,
-            tokenData.app_id,
-            tokenData.scope
-        ];
-        
-        console.log('[DEBUG] Executing query with values:', {
+        const { data, error } = await supabase
+            .from('slack_workspaces')
+            .upsert({
+                team_id: tokenData.team?.id,
+                team_name: tokenData.team?.name,
+                bot_token: tokenData.access_token,
+                bot_user_id: tokenData.bot_user_id,
+                app_id: tokenData.app_id,
+                scopes: tokenData.scope,
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'team_id'
+            });
+
+        if (error) {
+            console.error('[DEBUG] Supabase upsert error:', error);
+            throw error;
+        }
+
+        console.log('[DEBUG] Token stored successfully:', {
             teamId: tokenData.team?.id,
-            teamName: tokenData.team?.name,
-            hasToken: !!tokenData.access_token,
-            botUserId: tokenData.bot_user_id,
-            appId: tokenData.app_id,
-            hasScope: !!tokenData.scope
+            teamName: tokenData.team?.name
         });
 
-        const result = await client.query(query, values);
-        console.log('[DEBUG] Query executed successfully:', {
-            rowsAffected: result.rowCount,
-            teamName: result.rows[0]?.team_name
-        });
-        
     } catch (error) {
-        console.error('[DEBUG] Database error details:', {
-            message: error.message,
-            code: error.code,
-            stack: error.stack,
-            connectionString: process.env.DATABASE_URL ? 'Present' : 'Missing',
-            connectionStringLength: process.env.DATABASE_URL?.length
-        });
+        console.error('[DEBUG] Failed to store token:', error);
         throw error;
-    } finally {
-        try {
-            await client.end();
-            console.log('[DEBUG] Database connection closed');
-        } catch (error) {
-            console.error('[DEBUG] Error closing database connection:', error.message);
-        }
     }
 }
 
