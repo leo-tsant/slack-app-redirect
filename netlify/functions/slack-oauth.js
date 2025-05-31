@@ -4,6 +4,7 @@ const querystring = require('querystring');
 let pg;
 try {
     pg = require('pg');
+    console.log('PostgreSQL package loaded successfully');
 } catch (error) {
     console.log('PostgreSQL package not available, database storage will be disabled');
 }
@@ -64,14 +65,22 @@ exports.handler = async (event, context) => {
 
     // Store the token in your database if available
     if (pg && process.env.DATABASE_URL) {
-
+        console.log('Attempting database connection with URL:', process.env.DATABASE_URL.replace(/:[^:@]*@/, ':****@')); // Hide password in logs
         try {
             await storeWorkspaceToken(tokenResponse);
         } catch (error) {
             console.error('Failed to store token in database:', error);
+            console.error('Error details:', {
+                message: error.message,
+                code: error.code,
+                stack: error.stack
+            });
         }
     } else {
-        console.log('Database storage not configured, skipping token storage');
+        console.log('Database storage not configured:', {
+            pgAvailable: !!pg,
+            databaseUrlPresent: !!process.env.DATABASE_URL
+        });
     }
     
     // Also send the token to n8n via webhook if needed
